@@ -229,12 +229,22 @@ class CTFdBackup:
 
         print("Overview file created.")
 
-
 def main():
+    print("""
+       _____ _______ ______  _   ____             _                
+      / ____|__   __|  ____|| | |  _ \           | |               
+     | |       | |  | |__ __| | | |_) | __ _  ___| | ___   _ _ __  
+     | |       | |  |  __/ _` | |  _ < / _` |/ __| |/ / | | | '_ \ 
+     | |____   | |  | | | (_| | | |_) | (_| | (__|   <| |_| | |_) |
+      \_____|  |_|  |_|  \__,_| |____/ \__,_|\___|_|\_\\__,_| .__/ 
+                                                            | |    
+                                                            |_|    
+    """)
+
     parser = argparse.ArgumentParser(description="Backup CTFd data and create overview.")
     parser.add_argument("username", help="CTFd username")
     parser.add_argument("password", help="CTFd password")
-    parser.add_argument("url", help="CTFd URL")
+    parser.add_argument("url", help="CTFd URL example: deco.ctfd.com")
 
     args = parser.parse_args()
 
@@ -245,8 +255,8 @@ def main():
     backup = CTFdBackup(url, username, password)
     backup.backup_all()
 
-    # Optionally, create overview
     backup.create_overview()
+
 
 if __name__ == '__main__':
     main()
