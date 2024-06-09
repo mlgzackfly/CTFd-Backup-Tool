@@ -3,6 +3,7 @@ import requests
 import os
 import json
 import sys
+import argparse
 
 class CTFdBackup:
     def __init__(self, url, username, password):
@@ -230,16 +231,22 @@ class CTFdBackup:
 
 
 def main():
-    if len(sys.argv) != 4:
-        print('Usage: python ctfbackup.py <username> <password> <url>')
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Backup CTFd data and create overview.")
+    parser.add_argument("username", help="CTFd username")
+    parser.add_argument("password", help="CTFd password")
+    parser.add_argument("url", help="CTFd URL")
 
-    username = sys.argv[1]
-    password = sys.argv[2]
-    url = sys.argv[3]
+    args = parser.parse_args()
+
+    username = args.username
+    password = args.password
+    url = args.url
 
     backup = CTFdBackup(url, username, password)
     backup.backup_all()
+
+    # Optionally, create overview
+    backup.create_overview()
 
 if __name__ == '__main__':
     main()
