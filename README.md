@@ -44,3 +44,6 @@ CTFd Backup Tool is a Python script for backing up data from CTFd (Capture The F
 ## Example
 ```bash
 python ctfbackup.py admin password https://ctfd.example.com
+```
+
+![usage](image/usage.png)
