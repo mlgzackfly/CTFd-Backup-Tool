@@ -19,7 +19,10 @@ class CTFdBackup:
         return url
 
     def get_ctf_name(self):
-        return 'CTFd_Backup'
+        ctf_name = self.url.replace('https://', '').replace('http://', '').replace('/', '.')
+        if ctf_name.endswith('.'):
+            ctf_name = ctf_name[:-1]
+        return ctf_name
 
     def login(self):
         login_page = self.session.get(f'{self.url}/login')
