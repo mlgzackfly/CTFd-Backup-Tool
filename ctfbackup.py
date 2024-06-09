@@ -244,7 +244,7 @@ def main():
     parser = argparse.ArgumentParser(description="Backup CTFd data and create overview.")
     parser.add_argument("username", help="CTFd username")
     parser.add_argument("password", help="CTFd password")
-    parser.add_argument("url", help="CTFd URL example: deco.ctfd.com")
+    parser.add_argument("url", help="CTFd URL example: demo.ctfd.com")
 
     args = parser.parse_args()
 
