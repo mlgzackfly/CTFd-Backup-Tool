@@ -4,6 +4,8 @@ import os
 import json
 import sys
 import argparse
+from urllib.parse import urlparse
+from termcolor import colored
 
 class CTFdBackup:
     def __init__(self, url, username, password):
@@ -20,10 +22,8 @@ class CTFdBackup:
         return url
 
     def get_ctf_name(self):
-        ctf_name = self.url.replace('https://', '').replace('http://', '').replace('/', '.')
-        if ctf_name.endswith('.'):
-            ctf_name = ctf_name[:-1]
-        return ctf_name
+        parsed_url = urlparse(self.url)
+        return parsed_url.netloc
 
     def login(self):
         login_page = self.session.get(f'{self.url}/login')
@@ -76,42 +76,73 @@ class CTFdBackup:
         if response.status_code == 200:
             with open(filename, 'wb') as f:
                 f.write(response.content)
-            print(f'Downloaded file: {filename}')
-        else:
-            print(f'Failed to download file from {url}')
+            return True
+        return False
 
     def backup_challenges(self):
         challenges = self.get_data('challenges')
         challenges_dir = os.path.join(self.ctf_name, 'challenges')
+
+        categories = {}
 
         for challenge in challenges:
             challenge_id = challenge['id']
             name = challenge.get('name', 'unknown').replace('/', '-')
             challenge_data = self.get_data(f'challenges/{challenge_id}')
             category = challenge_data.get('category', 'uncategorized').replace('/', '-')
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(name)
+
+            print(f"- [ ] {name}", end='\r')
+
             category_dir = os.path.join(challenges_dir, category)
             os.makedirs(category_dir, exist_ok=True)
             challenge_dir = os.path.join(category_dir, name)
             os.makedirs(challenge_dir, exist_ok=True)
 
             challenge_filename = os.path.join(challenge_dir, f'{name}.md')
-            with open(challenge_filename, 'w', encoding='utf-8') as f:
-                f.write(f'# {name}\n\n')
-                f.write(f'**ID:** {challenge_id}\n\n')
-                f.write(f'**Category:** {category}\n\n')
-                f.write(f'**Description:**\n\n{challenge_data["description"]}\n\n')
-                files = challenge_data.get('files', [])
-                if files:
-                    f.write('**Files:**\n\n')
-                    for file_url in files:
-                        filename = file_url.rsplit('/', 1)[-1].split('?')[0]
-                        f.write(f'- [{filename}]({self.url}/{file_url})\n')
-            for file_url in files:
-                filename = file_url.rsplit('/', 1)[-1].split('?')[0]
-                file_path = os.path.join(challenge_dir, filename)
-                self.download_file(f'{self.url}/{file_url}', file_path)
+            try:
+                with open(challenge_filename, 'w', encoding='utf-8') as f:
+                    f.write(f'# {name}\n\n')
+                    f.write(f'**ID:** {challenge_id}\n\n')
+                    f.write(f'**Category:** {category}\n\n')
+                    f.write(f'**Description:**\n\n{challenge_data["description"]}\n\n')
+                    files = challenge_data.get('files', [])
+                    if files:
+                        f.write('**Files:**\n\n')
+                        for file_url in files:
+                            filename = file_url.rsplit('/', 1)[-1].split('?')[0]
+                            f.write(f'- [{filename}]({self.url}/{file_url})\n')
+
+                # Download files and print status
+                file_statuses = []
+                success = True
+                for file_url in files:
+                    filename = file_url.rsplit('/', 1)[-1].split('?')[0]
+                    file_path = os.path.join(challenge_dir, filename)
+                    if self.download_file(f'{self.url}/{file_url}', file_path):
+                        file_statuses.append(f"    Downloaded file: {filename}")
+                    else:
+                        success = False
+                        file_statuses.append(f"    Failed to download file: {filename}")
+
+                if success:
+                    print(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
+                else:
+                    print(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
+
+                for file_status in file_statuses:
+                    print(file_status)
+
+            except Exception as e:
+                print(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
+                continue
+
+        print("✅ Challenges backup completed.")
 
     def backup_teams(self):
+        teams = self.get_data('teams')
         teams_dir = os.path.join(self.ctf_name, 'teams')
 
         os.makedirs(teams_dir, exist_ok=True)
@@ -136,7 +167,7 @@ class CTFdBackup:
                     f.write(f'**Captain ID:** {team.get("captain_id", "None")}\n\n')
                     f.write('\n\n')
 
-        print("Teams backup completed.")
+        print("✅ Teams backup completed.")
 
     def backup_users(self):
         users_dir = os.path.join(self.ctf_name, 'users')
@@ -164,7 +195,7 @@ class CTFdBackup:
                     f.write(f'**Website:** {user.get("website", "None")}\n\n')
                     f.write('\n\n')
 
-        print("Users backup completed.")
+        print("✅ Users backup completed.")
 
     def backup_scoreboard(self):
         scoreboard = self.get_data('scoreboard')
@@ -189,15 +220,7 @@ class CTFdBackup:
                     f.write(f"- **{member_name}:** {member_score}\n")
                 f.write("\n\n")
 
-        print("Scoreboard backup completed.")
-
-    def backup_all(self):
-        self.login()
-        self.backup_challenges()
-        self.backup_teams()
-        self.backup_users()
-        self.backup_scoreboard()
-        self.create_overview()
+        print("✅ Scoreboard backup completed.")
 
     def create_overview(self):
         challenges = self.get_data('challenges')
@@ -207,27 +230,34 @@ class CTFdBackup:
 
         overview_filename = os.path.join(overview_dir, 'overview.md')
 
-        category_challenges = {}
+        categories = {}
 
         for challenge in challenges:
             category = challenge.get('category', 'uncategorized').replace('/', '-')
             name = challenge.get('name', 'unknown').replace('/', '-')
-            if category not in category_challenges:
-                category_challenges[category] = []
-            category_challenges[category].append(name)
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(name)
 
         with open(overview_filename, 'w', encoding='utf-8') as f:
-
-            for category, challenge_list in category_challenges.items():
+            for category, names in categories.items():
                 f.write(f"# {category}\n")
-                for name in challenge_list:
+                for name in names:
                     f.write(f"## {name}\n")
                     f.write("---\n")
                     f.write("writeup\n")
                     f.write("---\n")
                     f.write("flag\n\n")
 
-        print("Overview file created.")
+        print("✅ Overview file created.")
+
+    def backup_all(self):
+        self.login()
+        self.backup_challenges()
+        self.backup_teams()
+        self.backup_users()
+        self.backup_scoreboard()
+
 
 def main():
     print("""
