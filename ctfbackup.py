@@ -31,7 +31,7 @@ class CTFdBackup:
         if matched:
             self.nonce = matched.group(1)
         else:
-            print('Failed to find csrfNonce')
+            print('❌ Failed to find csrfNonce')
             sys.exit(1)
 
         login_url = f'{self.url}/login'
@@ -44,7 +44,7 @@ class CTFdBackup:
         if response.status_code == 200:
             print('Login successful')
         else:
-            print('Login failed')
+            print('❌ Login failed')
             print(response.text)
             sys.exit(1)
 
@@ -54,7 +54,7 @@ class CTFdBackup:
         if response.status_code == 200:
             return response.json().get('data')
         else:
-            print(f'Failed to fetch data from {endpoint}')
+            print(f'❌ Failed to fetch data from {endpoint}')
             return []
 
     def get_meta(self, endpoint):
@@ -63,7 +63,7 @@ class CTFdBackup:
         if response.status_code == 200:
             return response.json().get('meta')
         else:
-            print(f'Failed to fetch meta from {endpoint}')
+            print(f'❌ Failed to fetch meta from {endpoint}')
             return []
 
     def save_to_file(self, data, filename):
@@ -125,7 +125,7 @@ class CTFdBackup:
                         file_statuses.append(f"    Downloaded file: {filename}")
                     else:
                         success = False
-                        file_statuses.append(f"    Failed to download file: {filename}")
+                        file_statuses.append(f"    ❌ Failed to download file: {filename}")
 
                 if success:
                     print(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
