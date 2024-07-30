@@ -52,7 +52,11 @@ class CTFdBackup:
         url = f'{self.url}/api/v1/{endpoint}'
         response = self.session.get(url)
         if response.status_code == 200:
-            return response.json().get('data')
+            if "not found" not in response.json():
+                return response.json().get('data')
+            else:
+                print(f'❌ Failed to fetch data from {endpoint}')
+                return []
         else:
             print(f'❌ Failed to fetch data from {endpoint}')
             return []
@@ -150,6 +154,10 @@ class CTFdBackup:
         teams_filename = os.path.join(teams_dir, 'teams.md')
 
         teams_meta = self.get_meta('teams')
+
+        if teams_meta == []:
+            return
+
         total_pages = teams_meta['pagination']['pages']
 
         with open(teams_filename, 'w', encoding='utf-8') as f:
@@ -199,6 +207,7 @@ class CTFdBackup:
 
     def backup_scoreboard(self):
         scoreboard = self.get_data('scoreboard')
+
         scoreboard_dir = os.path.join(self.ctf_name, 'scoreboard')
 
         os.makedirs(scoreboard_dir, exist_ok=True)
@@ -213,11 +222,12 @@ class CTFdBackup:
                 score = entry['score']
                 f.write(f"## Rank {rank}: {name}\n\n")
                 f.write(f"**Score:** {score}\n\n")
-                f.write("### Members\n\n")
-                for member in entry['members']:
-                    member_name = member['name']
-                    member_score = member['score']
-                    f.write(f"- **{member_name}:** {member_score}\n")
+                if "members" in scoreboard:
+                    f.write("### Members\n\n")
+                    for member in entry['members']:
+                        member_name = member['name']
+                        member_score = member['score']
+                        f.write(f"- **{member_name}:** {member_score}\n")
                 f.write("\n\n")
 
         print("✅ Scoreboard backup completed.")
