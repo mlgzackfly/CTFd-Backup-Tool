@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from urllib.parse import urlparse
 from termcolor import colored
+from tqdm import tqdm
 
 class CTFdBackup:
     def __init__(self, url, username, password, incremental=False):
@@ -155,25 +156,83 @@ class CTFdBackup:
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
 
-    def download_file(self, url, filename, metadata=None, file_url=None):
-        """下載檔案並更新元數據"""
-        response = self.session.get(url)
-        if response.status_code == 200:
-            with open(filename, 'wb') as f:
-                f.write(response.content)
+    def download_file(self, url, filename, metadata=None, file_url=None, show_progress=True):
+        """下載檔案並更新元數據，顯示下載進度"""
+        try:
+            # 先發送 HEAD 請求獲取檔案大小
+            head_response = self.session.head(url)
+            if head_response.status_code != 200:
+                # 如果 HEAD 請求失敗，回退到普通下載
+                response = self.session.get(url)
+            else:
+                total_size = int(head_response.headers.get('content-length', 0))
+                
+                # 開始下載
+                response = self.session.get(url, stream=True)
             
-            # 更新元數據
-            if metadata is not None and file_url is not None:
-                file_info = {
-                    'local_path': filename,
-                    'size': len(response.content),
-                    'hash': self.get_file_hash(filename),
-                    'downloaded_at': datetime.now().isoformat(),
-                    'url': url
-                }
-                metadata[file_url] = file_info
+            if response.status_code == 200:
+                file_basename = os.path.basename(filename)
+                
+                # 確保目錄存在
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
+                
+                if show_progress and 'content-length' in response.headers:
+                    total_size = int(response.headers.get('content-length', 0))
+                    
+                    # 創建進度條
+                    with tqdm(
+                        total=total_size,
+                        unit='B',
+                        unit_scale=True,
+                        unit_divisor=1024,
+                        desc=f"📥 {file_basename}",
+                        ncols=80,
+                        leave=False
+                    ) as pbar:
+                        with open(filename, 'wb') as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    pbar.update(len(chunk))
+                else:
+                    # 無法獲取檔案大小或禁用進度條時
+                    with open(filename, 'wb') as f:
+                        if show_progress:
+                            # 顯示簡單的脈衝進度條
+                            with tqdm(
+                                desc=f"📥 {file_basename}",
+                                unit='B',
+                                unit_scale=True,
+                                unit_divisor=1024,
+                                ncols=80,
+                                leave=False
+                            ) as pbar:
+                                downloaded = 0
+                                for chunk in response.iter_content(chunk_size=8192):
+                                    if chunk:
+                                        f.write(chunk)
+                                        downloaded += len(chunk)
+                                        pbar.update(len(chunk))
+                        else:
+                            f.write(response.content)
+                
+                # 更新元數據
+                if metadata is not None and file_url is not None:
+                    file_info = {
+                        'local_path': filename,
+                        'size': os.path.getsize(filename),
+                        'hash': self.get_file_hash(filename),
+                        'downloaded_at': datetime.now().isoformat(),
+                        'url': url
+                    }
+                    metadata[file_url] = file_info
+                
+                return True
+                
+        except Exception as e:
+            print(f"❌ Error downloading {filename}: {str(e)}")
+            return False
             
-            return True
         return False
 
     def backup_challenges(self):
@@ -184,79 +243,85 @@ class CTFdBackup:
         metadata = self.load_backup_metadata()
 
         categories = {}
-
-        for challenge in challenges:
-            challenge_id = challenge['id']
-            name = challenge.get('name', 'unknown').replace('/', '-')
-            challenge_data = self.get_data(f'challenges/{challenge_id}')
-            category = challenge_data.get('category', 'uncategorized').replace('/', '-')
-            if category not in categories:
-                categories[category] = []
-            categories[category].append(name)
-
-            print(f"- [ ] {name}", end='\r')
-
-            category_dir = os.path.join(challenges_dir, category)
-            os.makedirs(category_dir, exist_ok=True)
-            challenge_dir = os.path.join(category_dir, name)
-            os.makedirs(challenge_dir, exist_ok=True)
-
-            challenge_filename = os.path.join(challenge_dir, f'{name}.md')
-            try:
-                with open(challenge_filename, 'w', encoding='utf-8') as f:
-                    f.write(f'# {name}\n\n')
-                    f.write(f'**ID:** {challenge_id}\n\n')
-                    f.write(f'**Category:** {category}\n\n')
-                    f.write(f'**Description:**\n\n{challenge_data["description"]}\n\n')
-                    files = challenge_data.get('files', [])
-                    if files:
-                        f.write('**Files:**\n\n')
-                        for file_url in files:
-                            filename = file_url.rsplit('/', 1)[-1].split('?')[0]
-                            f.write(f'- [{filename}]({self.url}/{file_url})\n')
-
-                # Download files and print status
-                file_statuses = []
-                success = True
-                files = challenge_data.get('files', [])
-                self.backup_stats['total_files'] += len(files)
+        
+        print("🔍 Processing challenges...")
+        
+        # 使用進度條處理所有題目
+        with tqdm(challenges, desc="📚 Challenges", unit="challenge", ncols=80) as pbar:
+            for challenge in pbar:
+                challenge_id = challenge['id']
+                name = challenge.get('name', 'unknown').replace('/', '-')
                 
-                for file_url in files:
-                    filename = file_url.rsplit('/', 1)[-1].split('?')[0]
-                    file_path = os.path.join(challenge_dir, filename)
+                # 更新進度條描述
+                pbar.set_description(f"📚 Processing: {name[:30]}...")
+                
+                challenge_data = self.get_data(f'challenges/{challenge_id}')
+                category = challenge_data.get('category', 'uncategorized').replace('/', '-')
+                if category not in categories:
+                    categories[category] = []
+                categories[category].append(name)
+
+                category_dir = os.path.join(challenges_dir, category)
+                os.makedirs(category_dir, exist_ok=True)
+                challenge_dir = os.path.join(category_dir, name)
+                os.makedirs(challenge_dir, exist_ok=True)
+
+                challenge_filename = os.path.join(challenge_dir, f'{name}.md')
+                try:
+                    with open(challenge_filename, 'w', encoding='utf-8') as f:
+                        f.write(f'# {name}\n\n')
+                        f.write(f'**ID:** {challenge_id}\n\n')
+                        f.write(f'**Category:** {category}\n\n')
+                        f.write(f'**Description:**\n\n{challenge_data["description"]}\n\n')
+                        files = challenge_data.get('files', [])
+                        if files:
+                            f.write('**Files:**\n\n')
+                            for file_url in files:
+                                filename = file_url.rsplit('/', 1)[-1].split('?')[0]
+                                f.write(f'- [{filename}]({self.url}/{file_url})\n')
+
+                    # Download files and print status
+                    file_statuses = []
+                    success = True
+                    files = challenge_data.get('files', [])
+                    self.backup_stats['total_files'] += len(files)
                     
-                    # 檢查是否需要下載
-                    if self.should_download_file(file_url, file_path, metadata):
-                        if self.download_file(f'{self.url}/{file_url}', file_path, metadata, file_url):
-                            if os.path.exists(file_path) and file_url in metadata:
-                                # 檢查是否為更新
-                                if 'downloaded_at' in metadata[file_url]:
-                                    file_statuses.append(f"    ✅ Updated file: {filename}")
-                                    self.backup_stats['files_updated'] += 1
+                    for file_url in files:
+                        filename = file_url.rsplit('/', 1)[-1].split('?')[0]
+                        file_path = os.path.join(challenge_dir, filename)
+                        
+                        # 檢查是否需要下載
+                        if self.should_download_file(file_url, file_path, metadata):
+                            if self.download_file(f'{self.url}/{file_url}', file_path, metadata, file_url):
+                                if os.path.exists(file_path) and file_url in metadata:
+                                    # 檢查是否為更新
+                                    if 'downloaded_at' in metadata[file_url]:
+                                        file_statuses.append(f"    ✅ Updated file: {filename}")
+                                        self.backup_stats['files_updated'] += 1
+                                    else:
+                                        file_statuses.append(f"    ⬇️ Downloaded file: {filename}")
+                                        self.backup_stats['files_downloaded'] += 1
                                 else:
                                     file_statuses.append(f"    ⬇️ Downloaded file: {filename}")
                                     self.backup_stats['files_downloaded'] += 1
                             else:
-                                file_statuses.append(f"    ⬇️ Downloaded file: {filename}")
-                                self.backup_stats['files_downloaded'] += 1
+                                success = False
+                                file_statuses.append(f"    ❌ Failed to download file: {filename}")
                         else:
-                            success = False
-                            file_statuses.append(f"    ❌ Failed to download file: {filename}")
+                            file_statuses.append(f"    ⏭️ Skipped file: {filename} (unchanged)")
+                            self.backup_stats['files_skipped'] += 1
+
+                    if success:
+                        tqdm.write(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
                     else:
-                        file_statuses.append(f"    ⏭️ Skipped file: {filename} (unchanged)")
-                        self.backup_stats['files_skipped'] += 1
+                        tqdm.write(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
 
-                if success:
-                    print(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
-                else:
-                    print(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
+                    for file_status in file_statuses:
+                        tqdm.write(file_status)
 
-                for file_status in file_statuses:
-                    print(file_status)
-
-            except Exception as e:
-                print(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
-                continue
+                except Exception as e:
+                    tqdm.write(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
+                    continue
 
         # 保存更新的元數據
         self.save_backup_metadata(metadata)
@@ -278,19 +343,21 @@ class CTFdBackup:
         total_pages = teams_meta['pagination']['pages']
 
         with open(teams_filename, 'w', encoding='utf-8') as f:
-            for page in range(1, total_pages + 1):
-                teams_data = self.get_data(f'teams?page={page}')
-                teams = teams_data
-                for team in teams:
-                    name = team.get('name', 'unknown').replace('/', '-')
-                    team_id = team['id']
-                    f.write(f'# {name}\n\n')
-                    f.write(f'**ID:** {team_id}\n\n')
-                    f.write(f'**Country:** {team["country"]}\n\n')
-                    f.write(f'**Affiliation:** {team.get("affiliation", "None")}\n\n')
-                    f.write(f'**Website:** {team.get("website", "None")}\n\n')
-                    f.write(f'**Captain ID:** {team.get("captain_id", "None")}\n\n')
-                    f.write('\n\n')
+            with tqdm(range(1, total_pages + 1), desc="👥 Teams", unit="page", ncols=80) as pbar:
+                for page in pbar:
+                    pbar.set_description(f"👥 Teams (page {page}/{total_pages})")
+                    teams_data = self.get_data(f'teams?page={page}')
+                    teams = teams_data
+                    for team in teams:
+                        name = team.get('name', 'unknown').replace('/', '-')
+                        team_id = team['id']
+                        f.write(f'# {name}\n\n')
+                        f.write(f'**ID:** {team_id}\n\n')
+                        f.write(f'**Country:** {team["country"]}\n\n')
+                        f.write(f'**Affiliation:** {team.get("affiliation", "None")}\n\n')
+                        f.write(f'**Website:** {team.get("website", "None")}\n\n')
+                        f.write(f'**Captain ID:** {team.get("captain_id", "None")}\n\n')
+                        f.write('\n\n')
 
         print("✅ Teams backup completed.")
 
@@ -305,20 +372,22 @@ class CTFdBackup:
         total_pages = users_meta['pagination']['pages']
 
         with open(users_filename, 'w', encoding='utf-8') as f:
-            for page in range(1, total_pages + 1):
-                users_data = self.get_data(f'users?page={page}')
-                users = users_data
-                for user in users:
-                    name = user.get('name', 'unknown').replace('/', '-')
-                    user_id = user['id']
-                    team_id = user.get('team_id', 'None')
-                    f.write(f'# {name}\n\n')
-                    f.write(f'**ID:** {user_id}\n\n')
-                    f.write(f'**Team ID:** {team_id}\n\n')
-                    f.write(f'**Country:** {user.get("country", "None")}\n\n')
-                    f.write(f'**Affiliation:** {user.get("affiliation", "None")}\n\n')
-                    f.write(f'**Website:** {user.get("website", "None")}\n\n')
-                    f.write('\n\n')
+            with tqdm(range(1, total_pages + 1), desc="👤 Users", unit="page", ncols=80) as pbar:
+                for page in pbar:
+                    pbar.set_description(f"👤 Users (page {page}/{total_pages})")
+                    users_data = self.get_data(f'users?page={page}')
+                    users = users_data
+                    for user in users:
+                        name = user.get('name', 'unknown').replace('/', '-')
+                        user_id = user['id']
+                        team_id = user.get('team_id', 'None')
+                        f.write(f'# {name}\n\n')
+                        f.write(f'**ID:** {user_id}\n\n')
+                        f.write(f'**Team ID:** {team_id}\n\n')
+                        f.write(f'**Country:** {user.get("country", "None")}\n\n')
+                        f.write(f'**Affiliation:** {user.get("affiliation", "None")}\n\n')
+                        f.write(f'**Website:** {user.get("website", "None")}\n\n')
+                        f.write('\n\n')
 
         print("✅ Users backup completed.")
 
