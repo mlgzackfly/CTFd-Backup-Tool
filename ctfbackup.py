@@ -4,17 +4,28 @@ import os
 import json
 import sys
 import argparse
+import hashlib
+import time
+from datetime import datetime
 from urllib.parse import urlparse
 from termcolor import colored
 
 class CTFdBackup:
-    def __init__(self, url, username, password):
+    def __init__(self, url, username, password, incremental=False):
         self.nonce = None
         self.url = self.format_url(url)
         self.username = username
         self.password = password
         self.session = requests.Session()
         self.ctf_name = self.get_ctf_name()
+        self.incremental = incremental
+        self.metadata_file = os.path.join(self.ctf_name, '.backup_metadata.json')
+        self.backup_stats = {
+            'files_skipped': 0,
+            'files_downloaded': 0,
+            'files_updated': 0,
+            'total_files': 0
+        }
 
     def format_url(self, url):
         if not url.startswith('http://') and not url.startswith('https://'):
@@ -24,6 +35,75 @@ class CTFdBackup:
     def get_ctf_name(self):
         parsed_url = urlparse(self.url)
         return parsed_url.netloc
+
+    def load_backup_metadata(self):
+        """載入備份元數據"""
+        if os.path.exists(self.metadata_file):
+            try:
+                with open(self.metadata_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                return {}
+        return {}
+
+    def save_backup_metadata(self, metadata):
+        """保存備份元數據"""
+        os.makedirs(os.path.dirname(self.metadata_file), exist_ok=True)
+        with open(self.metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=4)
+
+    def get_file_hash(self, file_path):
+        """計算檔案的SHA256雜湊值"""
+        if not os.path.exists(file_path):
+            return None
+        
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+
+    def should_download_file(self, file_url, local_file_path, metadata):
+        """檢查是否需要下載檔案"""
+        if not self.incremental:
+            return True
+            
+        filename = os.path.basename(local_file_path)
+        
+        # 如果本地檔案不存在，需要下載
+        if not os.path.exists(local_file_path):
+            return True
+            
+        # 檢查元數據中是否有記錄
+        if file_url not in metadata:
+            return True
+            
+        # 獲取遠端檔案資訊
+        try:
+            response = self.session.head(f'{self.url}/{file_url}')
+            if response.status_code != 200:
+                return True
+                
+            remote_size = response.headers.get('content-length')
+            remote_modified = response.headers.get('last-modified')
+            
+            # 比較檔案大小
+            local_size = os.path.getsize(local_file_path)
+            if remote_size and int(remote_size) != local_size:
+                return True
+                
+            # 比較本地檔案雜湊值
+            stored_hash = metadata[file_url].get('hash')
+            current_hash = self.get_file_hash(local_file_path)
+            
+            if stored_hash != current_hash:
+                return True
+                
+            return False
+            
+        except Exception:
+            # 如果檢查失敗，選擇下載
+            return True
 
     def login(self):
         login_page = self.session.get(f'{self.url}/login')
@@ -75,17 +155,33 @@ class CTFdBackup:
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
 
-    def download_file(self, url, filename):
+    def download_file(self, url, filename, metadata=None, file_url=None):
+        """下載檔案並更新元數據"""
         response = self.session.get(url)
         if response.status_code == 200:
             with open(filename, 'wb') as f:
                 f.write(response.content)
+            
+            # 更新元數據
+            if metadata is not None and file_url is not None:
+                file_info = {
+                    'local_path': filename,
+                    'size': len(response.content),
+                    'hash': self.get_file_hash(filename),
+                    'downloaded_at': datetime.now().isoformat(),
+                    'url': url
+                }
+                metadata[file_url] = file_info
+            
             return True
         return False
 
     def backup_challenges(self):
         challenges = self.get_data('challenges')
         challenges_dir = os.path.join(self.ctf_name, 'challenges')
+
+        # 載入元數據
+        metadata = self.load_backup_metadata()
 
         categories = {}
 
@@ -122,14 +218,33 @@ class CTFdBackup:
                 # Download files and print status
                 file_statuses = []
                 success = True
+                files = challenge_data.get('files', [])
+                self.backup_stats['total_files'] += len(files)
+                
                 for file_url in files:
                     filename = file_url.rsplit('/', 1)[-1].split('?')[0]
                     file_path = os.path.join(challenge_dir, filename)
-                    if self.download_file(f'{self.url}/{file_url}', file_path):
-                        file_statuses.append(f"    Downloaded file: {filename}")
+                    
+                    # 檢查是否需要下載
+                    if self.should_download_file(file_url, file_path, metadata):
+                        if self.download_file(f'{self.url}/{file_url}', file_path, metadata, file_url):
+                            if os.path.exists(file_path) and file_url in metadata:
+                                # 檢查是否為更新
+                                if 'downloaded_at' in metadata[file_url]:
+                                    file_statuses.append(f"    ✅ Updated file: {filename}")
+                                    self.backup_stats['files_updated'] += 1
+                                else:
+                                    file_statuses.append(f"    ⬇️ Downloaded file: {filename}")
+                                    self.backup_stats['files_downloaded'] += 1
+                            else:
+                                file_statuses.append(f"    ⬇️ Downloaded file: {filename}")
+                                self.backup_stats['files_downloaded'] += 1
+                        else:
+                            success = False
+                            file_statuses.append(f"    ❌ Failed to download file: {filename}")
                     else:
-                        success = False
-                        file_statuses.append(f"    ❌ Failed to download file: {filename}")
+                        file_statuses.append(f"    ⏭️ Skipped file: {filename} (unchanged)")
+                        self.backup_stats['files_skipped'] += 1
 
                 if success:
                     print(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
@@ -143,6 +258,8 @@ class CTFdBackup:
                 print(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
                 continue
 
+        # 保存更新的元數據
+        self.save_backup_metadata(metadata)
         print("✅ Challenges backup completed.")
 
     def backup_teams(self):
@@ -261,8 +378,36 @@ class CTFdBackup:
 
         print("✅ Overview file created.")
 
+    def print_backup_stats(self):
+        """印出備份統計資訊"""
+        print("\n" + "="*50)
+        print("📊 BACKUP STATISTICS")
+        print("="*50)
+        
+        if self.incremental:
+            print(f"🔄 Mode: Incremental Backup")
+        else:
+            print(f"🔄 Mode: Full Backup")
+            
+        print(f"📁 Total files: {self.backup_stats['total_files']}")
+        print(f"⬇️ Downloaded: {self.backup_stats['files_downloaded']}")
+        print(f"✅ Updated: {self.backup_stats['files_updated']}")
+        print(f"⏭️ Skipped: {self.backup_stats['files_skipped']}")
+        
+        if self.backup_stats['total_files'] > 0:
+            skip_percentage = (self.backup_stats['files_skipped'] / self.backup_stats['total_files']) * 100
+            print(f"💾 Efficiency: {skip_percentage:.1f}% files skipped")
+        
+        print("="*50)
+
     def backup_all(self):
         self.login()
+        
+        if self.incremental:
+            print("🔄 Running incremental backup...")
+        else:
+            print("🔄 Running full backup...")
+            
         self.backup_challenges()
         self.backup_teams()
         self.backup_users()
@@ -285,17 +430,26 @@ def main():
     parser.add_argument("username", help="CTFd username")
     parser.add_argument("password", help="CTFd password")
     parser.add_argument("url", help="CTFd URL example: demo.ctfd.com")
+    parser.add_argument("--incremental", "-i", action="store_true", 
+                       help="Enable incremental backup (skip unchanged files)")
+    parser.add_argument("--force-full", "-f", action="store_true",
+                       help="Force full backup (ignore metadata)")
 
     args = parser.parse_args()
 
     username = args.username
     password = args.password
     url = args.url
+    incremental = args.incremental and not args.force_full
 
-    backup = CTFdBackup(url, username, password)
+    if args.incremental and args.force_full:
+        print("⚠️ Warning: --force-full overrides --incremental")
+
+    backup = CTFdBackup(url, username, password, incremental)
     backup.backup_all()
 
     backup.create_overview()
+    backup.print_backup_stats()
 
 
 if __name__ == '__main__':
