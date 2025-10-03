@@ -27,6 +27,10 @@ class CTFdBackup:
             'files_updated': 0,
             'total_files': 0
         }
+        # Default options (can be overridden)
+        self.show_progress = True
+        self.quiet_mode = False
+        self.verbose_mode = False
 
     def format_url(self, url):
         if not url.startswith('http://') and not url.startswith('https://'):
@@ -112,7 +116,8 @@ class CTFdBackup:
         if matched:
             self.nonce = matched.group(1)
         else:
-            print('❌ Failed to find csrfNonce')
+            if not self.quiet_mode:
+                print('❌ Failed to find csrfNonce')
             sys.exit(1)
 
         login_url = f'{self.url}/login'
@@ -123,10 +128,13 @@ class CTFdBackup:
         }
         response = self.session.post(login_url, data=payload)
         if response.status_code == 200:
-            print('Login successful')
+            if not self.quiet_mode:
+                print('🔑 Login successful')
         else:
-            print('❌ Login failed')
-            print(response.text)
+            if not self.quiet_mode:
+                print('❌ Login failed')
+                if self.verbose_mode:
+                    print(response.text)
             sys.exit(1)
 
     def get_data(self, endpoint):
@@ -156,8 +164,11 @@ class CTFdBackup:
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
 
-    def download_file(self, url, filename, metadata=None, file_url=None, show_progress=True):
+    def download_file(self, url, filename, metadata=None, file_url=None, show_progress=None):
         """下載檔案並更新元數據，顯示下載進度"""
+        if show_progress is None:
+            show_progress = self.show_progress
+            
         try:
             # 先發送 HEAD 請求獲取檔案大小
             head_response = self.session.head(url)
@@ -176,7 +187,7 @@ class CTFdBackup:
                 # 確保目錄存在
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
                 
-                if show_progress and 'content-length' in response.headers:
+                if show_progress and 'content-length' in response.headers and not self.quiet_mode:
                     total_size = int(response.headers.get('content-length', 0))
                     
                     # 創建進度條
@@ -187,7 +198,8 @@ class CTFdBackup:
                         unit_divisor=1024,
                         desc=f"📥 {file_basename}",
                         ncols=80,
-                        leave=False
+                        leave=False,
+                        disable=self.quiet_mode
                     ) as pbar:
                         with open(filename, 'wb') as f:
                             for chunk in response.iter_content(chunk_size=8192):
@@ -197,7 +209,7 @@ class CTFdBackup:
                 else:
                     # 無法獲取檔案大小或禁用進度條時
                     with open(filename, 'wb') as f:
-                        if show_progress:
+                        if show_progress and not self.quiet_mode:
                             # 顯示簡單的脈衝進度條
                             with tqdm(
                                 desc=f"📥 {file_basename}",
@@ -205,7 +217,8 @@ class CTFdBackup:
                                 unit_scale=True,
                                 unit_divisor=1024,
                                 ncols=80,
-                                leave=False
+                                leave=False,
+                                disable=self.quiet_mode
                             ) as pbar:
                                 downloaded = 0
                                 for chunk in response.iter_content(chunk_size=8192):
@@ -230,7 +243,11 @@ class CTFdBackup:
                 return True
                 
         except Exception as e:
-            print(f"❌ Error downloading {filename}: {str(e)}")
+            if not self.quiet_mode:
+                print(f"❌ Error downloading {filename}: {str(e)}")
+            if self.verbose_mode:
+                import traceback
+                traceback.print_exc()
             return False
             
         return False
@@ -244,16 +261,19 @@ class CTFdBackup:
 
         categories = {}
         
-        print("🔍 Processing challenges...")
+        if not self.quiet_mode:
+            print("🔍 Processing challenges...")
         
         # 使用進度條處理所有題目
-        with tqdm(challenges, desc="📚 Challenges", unit="challenge", ncols=80) as pbar:
+        progress_disable = self.quiet_mode or not self.show_progress
+        with tqdm(challenges, desc="📚 Challenges", unit="challenge", ncols=80, disable=progress_disable) as pbar:
             for challenge in pbar:
                 challenge_id = challenge['id']
                 name = challenge.get('name', 'unknown').replace('/', '-')
                 
                 # 更新進度條描述
-                pbar.set_description(f"📚 Processing: {name[:30]}...")
+                if not progress_disable:
+                    pbar.set_description(f"📚 Processing: {name[:30]}...")
                 
                 challenge_data = self.get_data(f'challenges/{challenge_id}')
                 category = challenge_data.get('category', 'uncategorized').replace('/', '-')
@@ -311,21 +331,40 @@ class CTFdBackup:
                             file_statuses.append(f"    ⏭️ Skipped file: {filename} (unchanged)")
                             self.backup_stats['files_skipped'] += 1
 
-                    if success:
-                        tqdm.write(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
-                    else:
-                        tqdm.write(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
+                    if not self.quiet_mode:
+                        if success:
+                            if progress_disable:
+                                print(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
+                            else:
+                                tqdm.write(colored(f"- {colored('[✔]', 'green')} {name}", "green"))
+                        else:
+                            if progress_disable:
+                                print(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
+                            else:
+                                tqdm.write(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
 
-                    for file_status in file_statuses:
-                        tqdm.write(file_status)
+                        if self.verbose_mode:
+                            for file_status in file_statuses:
+                                if progress_disable:
+                                    print(file_status)
+                                else:
+                                    tqdm.write(file_status)
 
                 except Exception as e:
-                    tqdm.write(colored(f"- {colored('[✖]', 'red')} {name}", "red"))
+                    if not self.quiet_mode:
+                        error_msg = colored(f"- {colored('[✖]', 'red')} {name}", "red")
+                        if self.verbose_mode:
+                            error_msg += f" (Error: {str(e)})"
+                        if progress_disable:
+                            print(error_msg)
+                        else:
+                            tqdm.write(error_msg)
                     continue
 
         # 保存更新的元數據
         self.save_backup_metadata(metadata)
-        print("✅ Challenges backup completed.")
+        if not self.quiet_mode:
+            print("✅ Challenges backup completed.")
 
     def backup_teams(self):
         teams = self.get_data('teams')
@@ -495,30 +534,90 @@ def main():
                                                             |_|    
     """)
 
-    parser = argparse.ArgumentParser(description="Backup CTFd data and create overview.")
-    parser.add_argument("username", help="CTFd username")
-    parser.add_argument("password", help="CTFd password")
-    parser.add_argument("url", help="CTFd URL example: demo.ctfd.com")
-    parser.add_argument("--incremental", "-i", action="store_true", 
-                       help="Enable incremental backup (skip unchanged files)")
-    parser.add_argument("--force-full", "-f", action="store_true",
-                       help="Force full backup (ignore metadata)")
+    parser = argparse.ArgumentParser(
+        description="Backup CTFd data and create overview with incremental backup support.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --url demo.ctfd.com --username admin --password secret123
+  %(prog)s -u demo.ctfd.com -n admin -p secret123 --incremental
+  %(prog)s --url https://demo.ctfd.com -n admin -p secret123 --force-full
+  %(prog)s -u demo.ctfd.com -n admin -p secret123 -i
+
+For more information, visit: https://github.com/mlgzackfly/CTFd-Backup-Tool
+        """)
+    
+    # Required arguments
+    parser.add_argument("--url", "-u", 
+                       required=True,
+                       help="CTFd instance URL (e.g., demo.ctfd.com or https://demo.ctfd.com)")
+    parser.add_argument("--username", "--user", "-n", 
+                       required=True,
+                       help="CTFd username for authentication")
+    parser.add_argument("--password", "-p", 
+                       required=True,
+                       help="CTFd password for authentication")
+    
+    # Optional backup mode arguments
+    backup_group = parser.add_mutually_exclusive_group()
+    backup_group.add_argument("--incremental", "-i", 
+                            action="store_true",
+                            help="Enable incremental backup mode (skip unchanged files)")
+    backup_group.add_argument("--force-full", "-f", 
+                            action="store_true",
+                            help="Force full backup even if metadata exists")
+    
+    # Additional options
+    parser.add_argument("--output-dir", "-o",
+                       help="Custom output directory (default: uses CTFd hostname)")
+    parser.add_argument("--no-progress", 
+                       action="store_true",
+                       help="Disable progress bars (useful for automated scripts)")
+    parser.add_argument("--quiet", "-q",
+                       action="store_true", 
+                       help="Suppress non-essential output")
+    parser.add_argument("--verbose", "-v",
+                       action="store_true",
+                       help="Enable verbose output for debugging")
 
     args = parser.parse_args()
+
+    # Validate arguments
+    if args.quiet and args.verbose:
+        parser.error("--quiet and --verbose cannot be used together")
 
     username = args.username
     password = args.password
     url = args.url
     incremental = args.incremental and not args.force_full
 
-    if args.incremental and args.force_full:
+    if args.force_full and args.incremental:
         print("⚠️ Warning: --force-full overrides --incremental")
 
-    backup = CTFdBackup(url, username, password, incremental)
-    backup.backup_all()
+    if not args.quiet:
+        if args.incremental:
+            print("🔄 Mode: Incremental backup enabled")
+        elif args.force_full:
+            print("🔄 Mode: Force full backup")
+        else:
+            print("🔄 Mode: Standard backup")
 
+    backup = CTFdBackup(url, username, password, incremental)
+    
+    # Apply additional options
+    if args.output_dir:
+        backup.ctf_name = args.output_dir
+        backup.metadata_file = os.path.join(backup.ctf_name, '.backup_metadata.json')
+    
+    backup.show_progress = not args.no_progress
+    backup.quiet_mode = args.quiet
+    backup.verbose_mode = args.verbose
+    
+    backup.backup_all()
     backup.create_overview()
-    backup.print_backup_stats()
+    
+    if not args.quiet:
+        backup.print_backup_stats()
 
 
 if __name__ == '__main__':

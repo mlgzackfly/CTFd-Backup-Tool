@@ -35,30 +35,60 @@ CTFd Backup Tool is a Python script for backing up data from CTFd (Capture The F
 
 ## Usage
 1. Navigate to the directory where the script is located.
-2. Run the script using Python:
+2. Run the script using Python with the new parameterized interface:
 
-    **Full Backup (default):**
+    **Basic Usage:**
     ```bash
-    python ctfbackup.py <username> <password> <url>
+    python ctfbackup.py --url <url> --username <username> --password <password>
     ```
 
-    **Incremental Backup (recommended for subsequent runs):**
+    **Using Short Options:**
     ```bash
-    python ctfbackup.py <username> <password> <url> --incremental
+    python ctfbackup.py -u <url> -n <username> -p <password>
     ```
 
-    **Force Full Backup (ignore metadata):**
+    **Incremental Backup:**
     ```bash
-    python ctfbackup.py <username> <password> <url> --force-full
+    python ctfbackup.py -u <url> -n <username> -p <password> --incremental
+    # or
+    python ctfbackup.py -u <url> -n <username> -p <password> -i
     ```
 
-    Replace `<username>`, `<password>`, and `<url>` with your CTFd credentials and URL.
+    **Force Full Backup:**
+    ```bash
+    python ctfbackup.py -u <url> -n <username> -p <password> --force-full
+    # or
+    python ctfbackup.py -u <url> -n <username> -p <password> -f
+    ```
+
+    **Custom Output Directory:**
+    ```bash
+    python ctfbackup.py -u <url> -n <username> -p <password> --output-dir /path/to/backup
+    ```
+
+    **Quiet Mode (for scripts):**
+    ```bash
+    python ctfbackup.py -u <url> -n <username> -p <password> --quiet -i
+    ```
+
+    **Disable Progress Bars:**
+    ```bash
+    python ctfbackup.py -u <url> -n <username> -p <password> --no-progress
+    ```
 
 3. The script will start backing up your CTFd instance. Once completed, you will find the backups in the directory named after your CTFd instance.
 
 ### Command Line Options
-- `--incremental` or `-i`: Enable incremental backup mode (skip unchanged files)
-- `--force-full` or `-f`: Force full backup even if metadata exists
+- `--url`, `-u`: CTFd instance URL (required)
+- `--username`, `--user`, `-n`: CTFd username (required)
+- `--password`, `-p`: CTFd password (required)
+- `--incremental`, `-i`: Enable incremental backup mode
+- `--force-full`, `-f`: Force full backup (ignore metadata)
+- `--output-dir`, `-o`: Custom output directory
+- `--no-progress`: Disable progress bars
+- `--quiet`, `-q`: Suppress non-essential output
+- `--verbose`, `-v`: Enable verbose output for debugging
+- `--help`, `-h`: Show help message and exit
 
 ### Incremental Backup
 The tool tracks file metadata in `.backup_metadata.json` to determine which files have changed. This significantly reduces backup time for subsequent runs by:
@@ -76,12 +106,26 @@ The tool now includes comprehensive progress tracking:
 ## Example
 **First time backup (full):**
 ```bash
-python ctfbackup.py admin password https://ctfd.example.com
+python ctfbackup.py --url demo.ctfd.com --username admin --password secret123
+# or using short options
+python ctfbackup.py -u demo.ctfd.com -n admin -p secret123
 ```
 
 **Subsequent backups (incremental):**
 ```bash
-python ctfbackup.py admin password https://ctfd.example.com --incremental
+python ctfbackup.py -u demo.ctfd.com -n admin -p secret123 --incremental
+# or
+python ctfbackup.py -u demo.ctfd.com -n admin -p secret123 -i
+```
+
+**Automated script with quiet mode:**
+```bash
+python ctfbackup.py -u demo.ctfd.com -n admin -p secret123 -i --quiet
+```
+
+**Custom output directory:**
+```bash
+python ctfbackup.py -u demo.ctfd.com -n admin -p secret123 --output-dir ./my-ctf-backup
 ```
 
 **Output example:**
